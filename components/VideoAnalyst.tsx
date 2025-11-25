@@ -6,8 +6,8 @@ import {
   ChevronRight, BarChart2, Loader2, Upload, 
   Video as VideoIcon, BrainCircuit, TrendingUp, Shield, Target,
   PenTool, RefreshCw, Wifi, WifiOff, CloudUpload, Play, Clock,
-  Users, Move, Eye, Footprints, ClipboardList, Cone, Camera, Image as ImageIcon,
-  Maximize2
+  Users, Move, Eye, Footprints, ClipboardList, Camera, 
+  ListChecks, Info
 } from 'lucide-react';
 import { AnalysisData, VideoEvent, TacticalInsight } from '../types';
 
@@ -15,7 +15,6 @@ import { AnalysisData, VideoEvent, TacticalInsight } from '../types';
 // Note: Browser stability for >500MB depends on available RAM.
 const MAX_FILE_SIZE_MB = 2000; 
 const ANALYSIS_MODEL_NAME = "gemini-3-pro-preview";
-const VISUAL_MODEL_NAME = "gemini-2.5-flash-image";
 
 // Helper for exponential backoff
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -77,214 +76,179 @@ const getFileState = async (fileName: string, apiKey: string): Promise<string> =
   return data.state;
 };
 
-// --- Sub-Component: Insight Card with Visuals ---
+// --- Sub-Component: Insight Card (Simplified) ---
 const InsightCard: React.FC<{
   insight: TacticalInsight;
   videoRef: React.RefObject<HTMLVideoElement>;
-  apiKey: string;
-}> = ({ insight, videoRef, apiKey }) => {
+}> = ({ insight, videoRef }) => {
   const [frameImage, setFrameImage] = useState<string | null>(null);
-  const [generatedDiagram, setGeneratedDiagram] = useState<string | null>(null);
-  const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // --- Lazy Loading Effect ---
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    if (cardRef.current) {
+      observer.observe(cardRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    // Only capture if visible and not yet captured
+    if (isVisible && !frameImage && videoRef.current) {
+       // Small delay to ensure video is ready or seeked
+       setTimeout(() => {
+         captureFrame();
+       }, 500);
+    }
+  }, [isVisible, videoRef, insight, frameImage]);
 
   const captureFrame = () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
     
-    // If insight has a specific time, seek to it first (if needed), 
-    // but typically user might want to capture *current* frame or the frame at the timestamp.
-    // For smoothness, we assume the user might have clicked the card to jump to time.
-    // Let's force jump if we are not close.
-    if (insight.key_moment_seconds && Math.abs(video.currentTime - insight.key_moment_seconds) > 1) {
-       video.currentTime = insight.key_moment_seconds;
-       // We need to wait for seek to complete to capture frame? 
-       // Often instantaneous for local blobs, but let's just capture immediately 
-       // or user can click again.
-    }
+    // Auto-seek logic is removed to prevent disrupting playback
+    // We capture what is currently available or if user interacts
 
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth / 2; // Scale down slightly for performance
-      canvas.height = video.videoHeight / 2;
+      canvas.width = video.videoWidth; 
+      canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
-      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-      setFrameImage(canvas.toDataURL('image/jpeg', 0.8));
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        setFrameImage(canvas.toDataURL('image/jpeg', 0.85));
+      }
     } catch (e) {
       console.error("Frame capture failed", e);
     }
   };
 
-  const generateTacticalBoard = async () => {
-    if (!apiKey) return;
-    setIsGeneratingDiagram(true);
-    try {
-       const ai = new GoogleGenAI({ apiKey });
-       const prompt = `
-         Create a high-quality, professional 2D tactical football board diagram (top-down view) on a green pitch.
-         Visual Style: Schematic, clean coaching board, flat design.
-         
-         Scenario to depict based on analysis: 
-         ${insight.drill_setup || insight.visual_cue}
-         
-         Requirements:
-         - Show Team A (Red) and Team B (Blue) positions clearly as circles.
-         - Use arrows for player movement (solid) and ball movement (dashed).
-         - Highlight the key space or zone mentioned in the insight.
-         - Aspect Ratio: 16:9.
-       `;
-       
-       const response = await ai.models.generateContent({
-         model: VISUAL_MODEL_NAME,
-         contents: prompt,
-         config: {
-           imageConfig: {
-             aspectRatio: "16:9" // Nano banana supports 16:9
-           }
-         }
-       });
-
-       // Extract image from response
-       // Note: Gemini 2.5 Flash Image returns parts.
-       let foundImage = false;
-       const parts = response.candidates?.[0]?.content?.parts;
-       if (parts) {
-         for (const part of parts) {
-           if (part.inlineData && part.inlineData.data) {
-             setGeneratedDiagram(`data:image/png;base64,${part.inlineData.data}`);
-             foundImage = true;
-             break;
-           }
-         }
-       }
-    } catch (e) {
-      console.error("Diagram generation failed", e);
-    } finally {
-      setIsGeneratingDiagram(false);
-    }
-  };
-
   return (
-    <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-sm hover:border-slate-700 transition-colors">
+    <div ref={cardRef} className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-sm hover:border-slate-700 transition-colors">
       <div className="bg-slate-900/80 px-4 py-3 border-b border-slate-800 flex justify-between items-center">
           <h3 className="font-bold text-sm text-white flex items-center gap-2">
             <BrainCircuit className="w-4 h-4 text-purple-400" />
-            {insight.title}
+            <span className="truncate max-w-[200px] md:max-w-md">{insight.title}</span>
           </h3>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {insight.key_moment_timestamp && (
                <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
                  {insight.key_moment_timestamp}
                </span>
             )}
-            <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-950 px-2 py-1 rounded border border-slate-800">
+            <span className="text-[10px] uppercase font-bold text-emerald-500 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/50">
               {insight.phase}
             </span>
           </div>
       </div>
       
-      <div className="p-4 space-y-4">
-        {/* Text Content */}
-        <div className="grid grid-cols-1 gap-4">
-          <div>
-            <p className="text-[10px] text-slate-500 uppercase font-bold mb-1 tracking-wider">Tactical Observation</p>
-            <p className="text-sm text-slate-300 leading-relaxed border-l-2 border-slate-700 pl-3">
-              {insight.observation}
-            </p>
-          </div>
-
-          <div className="bg-emerald-500/5 rounded-lg p-3 border border-emerald-500/20">
-              <div className="flex items-center gap-2 mb-2 text-emerald-500">
-                <PenTool className="w-3 h-3" />
-                <span className="text-[10px] font-bold uppercase tracking-wider">Coaching Point</span>
-              </div>
-              <p className="text-sm text-slate-200 leading-relaxed">
-                {insight.improvement}
-              </p>
-          </div>
-        </div>
-
-        {/* Visuals Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-            
-            {/* 1. Literal Frame Screenshot */}
-            <div className="flex flex-col gap-2">
-               <div className="flex justify-between items-center">
-                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Evidence Frame</span>
+      <div className="p-4 flex flex-col gap-5">
+        
+        {/* Evidence Frame */}
+        {isVisible && (
+          <div className="w-full">
+             <div className="flex justify-between items-center mb-2">
+                <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider flex items-center gap-1">
+                  <Camera className="w-3 h-3" /> Match Context
+                </span>
+             </div>
+             <div className="aspect-video bg-black rounded border border-slate-800 relative group overflow-hidden max-w-lg">
+                {frameImage ? (
+                  <img src={frameImage} alt="Frame" className="w-full h-full object-contain" />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-2">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span className="text-xs">Syncing Frame...</span>
+                  </div>
+                )}
+                {insight.key_moment_seconds && (
                   <button 
-                    onClick={captureFrame}
-                    className="text-[10px] bg-slate-800 hover:bg-slate-700 text-white px-2 py-1 rounded flex items-center gap-1 transition-colors border border-slate-700"
-                    title="Capture current video frame"
+                    onClick={() => {
+                      if (videoRef.current && insight.key_moment_seconds) {
+                        videoRef.current.currentTime = insight.key_moment_seconds;
+                        videoRef.current.play();
+                        // Re-capture frame after seek
+                        setTimeout(captureFrame, 200);
+                      }
+                    }}
+                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
                   >
-                    <Camera className="w-3 h-3" /> Snap
+                     <div className="bg-white/10 p-3 rounded-full backdrop-blur-md border border-white/20 hover:scale-110 transition-transform">
+                        <Play className="w-6 h-6 text-white fill-current" />
+                     </div>
                   </button>
-               </div>
-               <div className="aspect-video bg-black rounded border border-slate-800 relative group overflow-hidden">
-                  {frameImage ? (
-                    <img src={frameImage} alt="Frame" className="w-full h-full object-contain" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-600">
-                       <span className="text-xs">No Frame Captured</span>
-                    </div>
-                  )}
-                  {insight.key_moment_seconds && (
-                    <button 
-                      onClick={() => {
-                        if (videoRef.current && insight.key_moment_seconds) {
-                          videoRef.current.currentTime = insight.key_moment_seconds;
-                          videoRef.current.play();
-                        }
-                      }}
-                      className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-                    >
-                       <Play className="w-8 h-8 text-white" />
-                    </button>
-                  )}
-               </div>
-            </div>
-
-            {/* 2. AI Generated Diagram */}
-            <div className="flex flex-col gap-2">
-               <div className="flex justify-between items-center">
-                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Tactical Board</span>
-                  <button 
-                    onClick={generateTacticalBoard}
-                    disabled={isGeneratingDiagram || !!generatedDiagram}
-                    className="text-[10px] bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-400 px-2 py-1 rounded flex items-center gap-1 transition-colors border border-emerald-900/50 disabled:opacity-50"
-                  >
-                    {isGeneratingDiagram ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImageIcon className="w-3 h-3" />}
-                    {generatedDiagram ? "Generated" : "Generate Visual"}
-                  </button>
-               </div>
-               <div className="aspect-video bg-[#1a472a] rounded border border-slate-800 relative overflow-hidden flex items-center justify-center">
-                  {isGeneratingDiagram ? (
-                    <div className="text-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-emerald-300 mx-auto mb-1" />
-                      <span className="text-[10px] text-emerald-200">Drawing Tactics...</span>
-                    </div>
-                  ) : generatedDiagram ? (
-                    <img src={generatedDiagram} alt="Tactical Board" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="text-emerald-900/40">
-                       <Cone className="w-12 h-12 opacity-50" />
-                    </div>
-                  )}
-               </div>
-            </div>
-
-        </div>
-
-        {/* Drill Info if available */}
-        {insight.drill_name && (
-          <div className="bg-blue-500/5 rounded-lg p-3 border border-blue-500/20 mt-2">
-              <div className="flex items-center gap-2 mb-2 text-blue-400">
-                <ClipboardList className="w-3 h-3" />
-                <span className="text-[10px] font-bold uppercase tracking-wider">Suggested Drill: {insight.drill_name}</span>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                {insight.drill_setup}
-              </p>
+                )}
+             </div>
           </div>
         )}
+
+        {/* Extensive Breakdown Section */}
+        <div className="space-y-4">
+          <div>
+            <p className="text-[10px] text-slate-500 uppercase font-bold mb-2 tracking-wider">Deep Analysis</p>
+            <p className="text-sm text-slate-300 leading-relaxed border-l-2 border-emerald-500/50 pl-3 italic">
+              "{insight.observation}"
+            </p>
+          </div>
+          
+          {insight.breakdown && insight.breakdown.length > 0 && (
+            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800/50">
+               <div className="flex items-center gap-2 mb-3 text-slate-400">
+                 <ListChecks className="w-4 h-4 text-purple-400" />
+                 <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Tactical Sequence Breakdown</span>
+               </div>
+               <div className="space-y-3 relative">
+                 {/* Connecting line */}
+                 <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-slate-800/50"></div>
+                 
+                 {insight.breakdown.map((step, idx) => (
+                   <div key={idx} className="relative flex items-start gap-3 text-xs text-slate-400 group hover:text-slate-200 transition-colors">
+                     <div className="relative z-10 w-6 h-6 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center shrink-0 group-hover:border-emerald-500 group-hover:text-emerald-500 transition-colors">
+                        <span className="font-mono text-[10px]">{idx + 1}</span>
+                     </div>
+                     <span className="leading-relaxed py-0.5">{step}</span>
+                   </div>
+                 ))}
+               </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4">
+             <div className="bg-emerald-500/5 rounded-lg p-3 border border-emerald-500/20">
+                <div className="flex items-center gap-2 mb-2 text-emerald-500">
+                  <PenTool className="w-3 h-3" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Coaching Correction</span>
+                </div>
+                <p className="text-xs text-slate-200 leading-relaxed">
+                  {insight.improvement}
+                </p>
+            </div>
+            
+            {insight.drill_name && (
+              <div className="bg-blue-500/5 rounded-lg p-3 border border-blue-500/20">
+                  <div className="flex items-center gap-2 mb-2 text-blue-400">
+                    <ClipboardList className="w-3 h-3" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">Training Drill: {insight.drill_name}</span>
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    {insight.drill_setup}
+                  </p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -422,39 +386,40 @@ export const VideoAnalyst: React.FC = () => {
         contentPart = { inlineData: { mimeType: file.type, data: base64Data } };
       }
 
-      setLoadingStage("Analyzing movements & structure...");
+      setLoadingStage("PERFORMING COMPREHENSIVE TACTICAL AUDIT...");
 
       const prompt = `
-        Role: You are an Elite UEFA Pro License Football Analyst.
-        Task: Analyze this video clip with EXTREME precision.
+        Role: You are a World-Class UEFA Pro License Tactical Analyst (e.g., Pep Guardiola's head analyst).
+        Task: Perform a "Frame-by-Frame" style Chronological Micro-Audit of this footage.
         
-        CRITICAL RULES ON CERTAINTY:
-        1. NO HALLUCINATIONS: If the video is blurry, cuts off, or the ball is not visible, DO NOT invent events.
-        2. GOALS: Only mark "Goal" if you explicitly see the ball cross the line or the referee signal it.
-        3. FORMATIONS: Only state formation (e.g., 4-3-3) if clear. Otherwise "Dynamic/Unclear".
+        CRITICAL INSTRUCTIONS FOR "COMPREHENSIVE COVERAGE":
+        1. UNLIMITED SCOPE: Do not stick to a fixed number like 10. Your goal is to generate a deep dive \`tactical_insight\` card for EVERY distinct tactical event, micro-movement, or interaction you observe.
+        2. NO MATTER HOW SMALL: Treat every detail with extreme importance. A simple pass to a fullback, a head check, a body feint, a defensive shuffle, a change in pressing trigger—if it happens, analyze it.
+        3. NO EVENT LEFT BEHIND: If the video contains 5 events, analyze 5. If it contains 50, analyze 50. Do not summarize; enumerate.
+        4. DEPTH & BREADTH: For EACH identified event, provide the full \`breakdown\` sequence.
         
         ANALYSIS REQUIREMENTS:
-        1. Match Events: Key actions with timestamps.
-        2. Player Analysis: Focus on individual off-ball movement, decoy runs, defensive tracking, and pressing intensity. Identify players by number or position.
-        3. Tactical Insights: Team shape, spacing, and specific coaching improvements.
+        1. Match Events: Log every shot, pass, tackle, and transition in the 'events' array.
+        2. Player Analysis: Focus on individual off-ball movement, decoy runs, defensive tracking, and pressing intensity.
+        3. Tactical Insights: This is the core. Every time the game state changes or a decision is made, create an insight.
         
         For "Tactical Insights", you MUST include:
-        - improvement: A direct tactical adjustment for the match.
-        - drill_name: A specific training drill name to practice this scenario.
-        - drill_setup: Brief instructions on how to set up this drill.
-        - visual_cue: Detailed visual description of the scenario for a tactical board diagram (e.g. "Red team in 4-4-2 block, Blue #10 receiving in half-space, arrows showing press").
-        - key_moment_timestamp: The specific MM:SS where this tactic is most visible (for frame capturing).
-        - key_moment_seconds: The integer seconds for the above timestamp.
+        - improvement: A direct tactical adjustment for the players.
+        - breakdown: An array of strings detailing the sequence of events. BE EXTENSIVE. Example: ["1. CB scans field", "2. DM drops into pocket", "3. Winger pins fullback", "4. Pass breaks first line", "5. ...", "6. ..."].
+        - drill_name: A specific training drill name.
+        - drill_setup: Brief instructions.
+        - key_moment_timestamp: MM:SS.
+        - key_moment_seconds: integer seconds.
         
         Return JSON matching this schema:
         {
-          "match_context": "string (or 'Unknown')",
+          "match_context": "string",
           "formations": { "team_a": "string", "team_b": "string" },
           "events": [{ "timestamp": "MM:SS", "seconds": number, "type": "string", "team": "string", "description": "string" }],
           "player_analysis": [
              { 
-               "player": "string (e.g. 'No. 9' or 'Right Winger')", 
-               "action_type": "Off-Ball Run | Decoy | Defensive Tracking | Pressing | Playmaking",
+               "player": "string", 
+               "action_type": "string",
                "description": "string",
                "impact": "High | Medium | Low",
                "time_start": "MM:SS"
@@ -464,10 +429,10 @@ export const VideoAnalyst: React.FC = () => {
              "title": "string", 
              "phase": "string", 
              "observation": "string", 
-             "improvement": "Direct tactical adjustment for the players.", 
-             "drill_name": "Specific training drill name",
-             "drill_setup": "Brief setup description for the coach",
-             "visual_cue": "Detailed visual description for diagram generation.",
+             "breakdown": ["string", "string", "string", "string", "string", "string"], 
+             "improvement": "string", 
+             "drill_name": "string",
+             "drill_setup": "string",
              "key_moment_timestamp": "MM:SS",
              "key_moment_seconds": number
           }]
@@ -497,8 +462,9 @@ export const VideoAnalyst: React.FC = () => {
                     }
                   ],
                   config: {
-                    thinkingConfig: { thinkingBudget: 2048 },
-                    maxOutputTokens: 12000,
+                    // EXTREME THINKING BUDGET
+                    thinkingConfig: { thinkingBudget: 32768 }, // Maximize thinking
+                    maxOutputTokens: 60000,
                   }
               });
               responseText = response.text || "";
@@ -525,8 +491,9 @@ export const VideoAnalyst: React.FC = () => {
       const json = tryParseJSON(responseText);
       setAnalysisData(json);
       
-      if (json.player_analysis?.length > 0) setActiveTab('players');
-      else if (json.tactical_insights?.length > 0) setActiveTab('tactics');
+      // Default to Tactics tab because that's where the magic is now
+      if (json.tactical_insights?.length > 0) setActiveTab('tactics');
+      else if (json.player_analysis?.length > 0) setActiveTab('players');
 
     } catch (err: any) {
       console.error("Analysis Error", err);
@@ -603,8 +570,6 @@ export const VideoAnalyst: React.FC = () => {
                </div>
                <div className="text-slate-500">|</div>
                <div className="text-slate-500">ANALYSIS: {ANALYSIS_MODEL_NAME}</div>
-               <div className="text-slate-500">|</div>
-               <div className="text-slate-500">VISUALS: {VISUAL_MODEL_NAME}</div>
             </div>
 
             <div className="flex items-center gap-4">
@@ -634,7 +599,7 @@ export const VideoAnalyst: React.FC = () => {
                 {isAnalyzing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    {retryCount > 0 ? `RETRYING (${retryCount})...` : "ANALYZING..."}
+                    {retryCount > 0 ? `RETRYING (${retryCount})...` : "DEEP ANALYZING..."}
                   </>
                 ) : (
                   <>
@@ -697,6 +662,14 @@ export const VideoAnalyst: React.FC = () => {
         {/* Tabs */}
         <div className="flex border-b border-slate-800">
           <button 
+            onClick={() => setActiveTab('tactics')}
+            className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors
+              ${activeTab === 'tactics' ? 'bg-slate-800/80 text-emerald-400 border-b-2 border-emerald-500' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900/50'}
+            `}
+          >
+            <BrainCircuit className="w-3.5 h-3.5" /> Tactics
+          </button>
+          <button 
             onClick={() => setActiveTab('events')}
             className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors
               ${activeTab === 'events' ? 'bg-slate-800/80 text-emerald-400 border-b-2 border-emerald-500' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900/50'}
@@ -711,14 +684,6 @@ export const VideoAnalyst: React.FC = () => {
             `}
           >
             <Users className="w-3.5 h-3.5" /> Players
-          </button>
-          <button 
-            onClick={() => setActiveTab('tactics')}
-            className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors
-              ${activeTab === 'tactics' ? 'bg-slate-800/80 text-emerald-400 border-b-2 border-emerald-500' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900/50'}
-            `}
-          >
-            <BrainCircuit className="w-3.5 h-3.5" /> Tactics
           </button>
         </div>
 
@@ -751,13 +716,14 @@ export const VideoAnalyst: React.FC = () => {
                    </div>
                    <div className="flex justify-between text-[10px] font-mono text-emerald-500">
                      <span>{Math.round(progress)}%</span>
-                     <span className="animate-pulse">{retryCount > 0 ? "RETRYING" : "PROCESSING"}</span>
+                     <span className="animate-pulse">{retryCount > 0 ? "RETRYING" : "THINKING"}</span>
                    </div>
                 </div>
                 <div className="space-y-2">
                   <h3 className={`font-bold tracking-widest uppercase text-sm animate-pulse ${retryCount > 0 ? 'text-yellow-500' : 'text-emerald-400'}`}>
                     {loadingStage}
                   </h3>
+                  <p className="text-xs text-slate-500">Processing thousands of tactical possibilities...</p>
                 </div>
               </div>
             )}
@@ -889,7 +855,6 @@ export const VideoAnalyst: React.FC = () => {
                     key={idx} 
                     insight={insight} 
                     videoRef={videoRef}
-                    apiKey={apiKey}
                   />
                 ))}
               </div>

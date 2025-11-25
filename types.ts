@@ -11,6 +11,7 @@ export interface TacticalInsight {
   title: string;
   phase: 'Attacking' | 'Defending' | 'Transition A-D' | 'Transition D-A';
   observation: string;
+  breakdown?: string[]; // Detailed step-by-step tactical breakdown
   improvement: string; // Tactical fix (Coaching Point)
   drill_name?: string; // Specific drill name
   drill_setup?: string; // Brief setup instructions
